@@ -103,12 +103,15 @@ class SimulationManager:
                 for truck in self.simulation["trucks"]:
                     if truck["status"] == "finalizado":
                         continue
-                    truck["speed_kmh"] = round(self._rng.uniform(self.min_speed, self.max_speed), 2)
+                    # Apply the speed that was active during the elapsed interval;
+                    # choose the next speed only after the truck has advanced.
                     truck["progress_m"] = min(truck["distance_m"], truck["progress_m"] + truck["speed_kmh"] / 3.6 * elapsed)
                     truck["position"] = self._position_at(truck, truck["progress_m"])
                     if truck["progress_m"] >= truck["distance_m"]:
                         truck["status"] = "finalizado"
                         truck["speed_kmh"] = 0.0
+                    else:
+                        truck["speed_kmh"] = round(self._rng.uniform(self.min_speed, self.max_speed), 2)
                     truck["updated_at"] = utc_now()
                     # Speeds are sampled only while moving, so the stop does not distort the speed report.
                     if truck["status"] == "en_ruta":
@@ -185,7 +188,8 @@ class SimulationManager:
         few = [r["truck_id"] for r in rows if r["samples"] < self.few_samples_threshold]
         if few:
             sentences.append(f"Hay pocas muestras (menos de {self.few_samples_threshold}) para: {', '.join(few)}.")
-        high = [r for r in rows if r["above_55_percent"] is not None and r["above_55_percent"] > self.high_speed_warning_percent]
+        high = [r for r in rows if r["samples"] > 0
+                and r["above_55_kmh"] * 100 > self.high_speed_warning_percent * r["samples"]]
         if high:
             sentences.append(f"Más del {self.high_speed_warning_percent:g} % de las muestras supera 55 km/h en: " + ", ".join(f"{r['truck_id']} ({r['above_55_percent']:.1f} %)" for r in high) + ".")
         differences = [(truck_id, average - fleet_avg) for truck_id, average in averages

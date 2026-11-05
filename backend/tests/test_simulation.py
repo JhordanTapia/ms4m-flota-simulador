@@ -68,6 +68,40 @@ def test_background_simulation_finishes_on_road_destination():
     assert all(truck["position"] == [0.0, 0.0000001] for truck in state["trucks"])
 
 
+def test_elapsed_distance_uses_speed_from_the_previous_interval():
+    manager = SimulationManager(connected_network_with_many_pairs(), seed=3811, interval_seconds=0.03)
+
+    class NextSpeed:
+        @staticmethod
+        def uniform(_minimum, maximum):
+            return maximum
+
+    async def exercise():
+        await manager.start()
+        first = manager.simulation["trucks"][0]
+        previous_speed = first["speed_kmh"]
+        previous_tick = manager.simulation["_last_tick"]
+        manager._rng = NextSpeed()
+        deadline = asyncio.get_running_loop().time() + 1
+        while manager.simulation["_last_tick"] == previous_tick:
+            if asyncio.get_running_loop().time() > deadline:
+                raise AssertionError("La simulación no ejecutó el siguiente intervalo.")
+            await asyncio.sleep(0.001)
+        elapsed = manager.simulation["_last_tick"] - previous_tick
+        current = manager.simulation["trucks"][0]
+        expected_distance = previous_speed / 3.6 * elapsed
+        assert current["progress_m"] == pytest.approx(expected_distance)
+        assert current["speed_kmh"] == 60
+        if manager._task:
+            manager._task.cancel()
+            try:
+                await manager._task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(exercise())
+
+
 def test_report_uses_arithmetic_samples_and_configured_heuristics():
     manager = SimulationManager(connected_network_with_many_pairs(), few_samples_threshold=3,
                                 high_speed_warning_percent=25, difference_threshold_kmh=2)
@@ -93,4 +127,12 @@ def test_report_uses_arithmetic_samples_and_configured_heuristics():
     assert second["average_speed_kmh"] == 30
     assert "Más del 25 %" in report["explanation"]
     assert "promedio de la flota" in report["explanation"]
+
+
+def test_high_speed_warning_compares_unrounded_share_to_threshold():
+    manager = SimulationManager(connected_network_with_many_pairs(), high_speed_warning_percent=25)
+    rows = [{"truck_id": "C8Q1-001", "samples": 10_000, "above_55_kmh": 2_501,
+             "above_55_percent": 25.0}]
+    explanation = manager._explain(rows, [("C8Q1-001", 50.0)])
+    assert "Más del 25 %" in explanation
 
