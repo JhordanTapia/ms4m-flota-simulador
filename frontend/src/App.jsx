@@ -129,7 +129,8 @@ function Metric({ icon, label, value, note, tone = 'blue' }) {
 }
 
 function TruckRow({ truck, index }) {
-  return <div className="truck-row"><span className={`truck-avatar avatar-${index}`}><Truck size={16} /></span><div className="truck-info"><strong>{truck.id}</strong><span>{truck.origin.name} <b>→</b> {truck.destination.name}</span></div><div className="truck-right"><strong>{fmt(truck.speed_kmh)} <small>km/h</small></strong><span className={`truck-status ${truck.status === 'finalizado' ? 'finished' : ''}`}><i />{truck.status === 'finalizado' ? 'Finalizado' : 'En ruta'}</span></div></div>
+  const updatedAt = truck.updated_at ? new Date(truck.updated_at).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'
+  return <div className="truck-row"><span className={`truck-avatar avatar-${index}`}><Truck size={16} /></span><div className="truck-info"><strong>{truck.id}</strong><span>{truck.origin.name} <b>→</b> {truck.destination.name}</span></div><div className="truck-right"><strong>{fmt(truck.speed_kmh)} <small>km/h</small></strong><span className={`truck-status ${truck.status === 'finalizado' ? 'finished' : ''}`} title={`Actualizado: ${truck.updated_at || 'sin dato'}`}><i />{truck.status === 'finalizado' ? 'Finalizado' : 'En ruta'}<small>· {updatedAt}</small></span></div></div>
 }
 
 export default App
