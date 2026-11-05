@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip, useMap } from 'react-leaflet'
 import { Activity, AlertTriangle, ArrowDownToLine, ArrowUpFromLine, Clock3, Gauge, Map as MapIcon, Play, RotateCcw, Truck } from 'lucide-react'
 
@@ -38,6 +38,7 @@ function App() {
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
   const [updated, setUpdated] = useState(null)
+  const networkLoaded = useRef(false)
 
   const get = useCallback(async (path) => {
     const response = await fetch(`${API}${path}`)
@@ -49,15 +50,19 @@ function App() {
   }, [])
 
   const refresh = useCallback(async (includeNetwork = false) => {
+    const shouldLoadNetwork = includeNetwork || !networkLoaded.current
     try {
       const [simData, reportData] = await Promise.all([get('/api/simulations/current'), get('/api/simulations/report')])
-      if (includeNetwork) setNetwork(await get('/api/network'))
+      if (shouldLoadNetwork) {
+        setNetwork(await get('/api/network'))
+        networkLoaded.current = true
+      }
       setSimulation(simData.status === 'sin_iniciar' ? null : simData)
       setReport(reportData)
       setUpdated(new Date())
       setError('')
     } catch (e) { setError(`No se pudo consultar la API: ${e.message}`) }
-    finally { if (includeNetwork) setLoading(false) }
+    finally { if (shouldLoadNetwork) setLoading(false) }
   }, [get])
 
   useEffect(() => { refresh(true) }, [refresh])
