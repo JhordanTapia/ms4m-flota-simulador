@@ -171,7 +171,9 @@ class RoadNetwork:
                 break
             for edge in self.adjacency[node]:
                 candidate_distance = distance + edge.distance
-                candidate_sequence = sequence if sequence and sequence[-1] == edge.route_id else sequence + (edge.route_id,)
+                # Compare the complete edge ID sequence; every pair of consecutive
+                # polyline points is a traversable edge with its own route ID.
+                candidate_sequence = sequence + (edge.route_id,)
                 old = best.get(edge.target)
                 better = old is None or candidate_distance < old[0] - 1e-7
                 tied_better = old is not None and abs(candidate_distance - old[0]) <= 1e-7 and candidate_sequence < old[1]
@@ -191,11 +193,7 @@ class RoadNetwork:
             cursor = parent
         path_nodes.reverse()
         edge_ids.reverse()
-        route_ids: list[int] = []
-        for route_id in edge_ids:
-            if not route_ids or route_ids[-1] != route_id:
-                route_ids.append(route_id)
-        return {"points": [self.coordinates[n] for n in path_nodes], "distance_m": best[end][0], "route_ids": route_ids}
+        return {"points": [self.coordinates[n] for n in path_nodes], "distance_m": best[end][0], "route_ids": edge_ids}
 
     def reachable_pairs(self) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         dumps_by_component: dict[int, list[dict[str, Any]]] = defaultdict(list)
