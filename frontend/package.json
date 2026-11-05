@@ -1,0 +1,17 @@
+{
+  "name": "ids26-c8q1-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "dev": "vite --host 0.0.0.0", "build": "vite build", "preview": "vite preview --host 0.0.0.0" },
+  "dependencies": {
+    "@vitejs/plugin-react": "4.4.1",
+    "vite": "6.4.5",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-leaflet": "5.0.0",
+    "leaflet": "1.9.4",
+    "lucide-react": "0.511.0"
+  },
+  "devDependencies": {}
+}
