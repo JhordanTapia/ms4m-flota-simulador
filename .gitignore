@@ -8,3 +8,4 @@ dist/
 frontend/dist/
 .vercel/
 *.log
+.env.local
