@@ -27,13 +27,19 @@ def test_api_network_start_current_report_and_request_validation():
         assert started.json()["route_selection"]["reachable_pairs"] == 4002
         assert started.json()["route_selection"]["unreachable_pairs_skipped"] == 168
 
-        current = client.get("/api/simulations/current").json()
+        run_params = {"seed": started.json()["seed"], "started_at": started.json()["started_at"]}
+        current = client.get("/api/simulations/current", params=run_params).json()
         assert len(current["trucks"]) == 5
         assert all("route" not in truck for truck in current["trucks"])
         assert current["route_selection"]["unreachable_pairs_skipped"] == 168
-        report = client.get("/api/simulations/report").json()
+        report = client.get("/api/simulations/report", params=run_params).json()
         assert len(report["trucks"]) == 5
         assert "heuristic_thresholds" in report
+        snapshot = client.get("/api/simulations/snapshot", params=run_params).json()
+        assert len(snapshot["simulation"]["trucks"]) == 5
+        assert len(snapshot["report"]["trucks"]) == 5
+        assert client.get("/api/docs").status_code == 200
+        assert client.get("/api/openapi.json").status_code == 200
 
 
 def test_invalid_startup_data_returns_consistent_service_unavailable(monkeypatch):

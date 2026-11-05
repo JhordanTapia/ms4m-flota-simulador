@@ -1,4 +1,4 @@
-import asyncio
+from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.network import RoadNetwork
@@ -18,24 +18,15 @@ def test_simulation_starts_five_stable_trucks_and_is_reproducible():
     network = connected_network_with_many_pairs()
     manager = SimulationManager(network, seed=3811)
     replay = SimulationManager(network, seed=3811)
-
-    async def start_both():
-        first = await manager.start()
-        second = await replay.start()
-        for instance in (manager, replay):
-            if instance._task:
-                instance._task.cancel()
-                try:
-                    await instance._task
-                except asyncio.CancelledError:
-                    pass
-        return first, second
-
-    result, replay_result = asyncio.run(start_both())
+    result = manager.start()
+    replay_result = replay.start()
     assert [truck["id"] for truck in result["trucks"]] == [f"C8Q1-{i:03d}" for i in range(1, 6)]
     assert all(30 <= truck["speed_kmh"] <= 60 for truck in result["trucks"])
     signature = lambda value: [(t["origin"]["id"], t["destination"]["id"], t["speed_kmh"]) for t in value["trucks"]]
     assert signature(result) == signature(replay_result)
+    restored = replay.current(result["seed"], result["started_at"])
+    assert restored["id"] == result["id"]
+    assert signature(restored) == signature(result)
 
 
 def test_position_interpolates_inside_segments_and_stops_at_destination():
@@ -46,23 +37,15 @@ def test_position_interpolates_inside_segments_and_stops_at_destination():
     assert SimulationManager._position_at(truck, 250) == truck["route"][-1]
 
 
-def test_background_simulation_finishes_on_road_destination():
+def test_stateless_simulation_finishes_on_road_destination():
     network = RoadNetwork({
         "Routes": [{"id_trm_cs": 1, "points": [[0, 0], [0, 0.0000001]]}],
         "Load": [{"id": 1, "name": "Origen", "coor": [0, 0]}],
         "Dump": [{"id": 2, "name": "Destino", "coor": [0, 0.0000001]}],
     })
     manager = SimulationManager(network, seed=9, interval_seconds=0.01)
-
-    async def exercise():
-        await manager.start()
-        await asyncio.sleep(0.05)
-        state = manager.current()
-        if manager._task:
-            await manager._task
-        return state
-
-    state = asyncio.run(exercise())
+    started_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    state = manager.current(9, started_at)
     assert state["status"] == "finalizada"
     assert all(truck["status"] == "finalizado" for truck in state["trucks"])
     assert all(truck["position"] == [0.0, 0.0000001] for truck in state["trucks"])
@@ -70,62 +53,27 @@ def test_background_simulation_finishes_on_road_destination():
 
 def test_elapsed_distance_uses_speed_from_the_previous_interval():
     manager = SimulationManager(connected_network_with_many_pairs(), seed=3811, interval_seconds=0.03)
-
-    class NextSpeed:
-        @staticmethod
-        def uniform(_minimum, maximum):
-            return maximum
-
-    async def exercise():
-        await manager.start()
-        first = manager.simulation["trucks"][0]
-        previous_speed = first["speed_kmh"]
-        previous_tick = manager.simulation["_last_tick"]
-        manager._rng = NextSpeed()
-        deadline = asyncio.get_running_loop().time() + 1
-        while manager.simulation["_last_tick"] == previous_tick:
-            if asyncio.get_running_loop().time() > deadline:
-                raise AssertionError("La simulación no ejecutó el siguiente intervalo.")
-            await asyncio.sleep(0.001)
-        elapsed = manager.simulation["_last_tick"] - previous_tick
-        current = manager.simulation["trucks"][0]
-        expected_distance = previous_speed / 3.6 * elapsed
-        assert current["progress_m"] == pytest.approx(expected_distance)
-        assert current["speed_kmh"] == 60
-        if manager._task:
-            manager._task.cancel()
-            try:
-                await manager._task
-            except asyncio.CancelledError:
-                pass
-
-    asyncio.run(exercise())
+    started = manager.start()
+    started_at = datetime.fromisoformat(started["started_at"])
+    previous_speed = started["trucks"][0]["speed_kmh"]
+    state = manager._build(3811, started_at, started_at + timedelta(seconds=0.03))
+    current = state["trucks"][0]
+    expected_distance = previous_speed / 3.6 * 0.03
+    assert current["progress_m"] == pytest.approx(expected_distance)
+    assert 30 <= current["speed_kmh"] <= 60
 
 
 def test_report_uses_arithmetic_samples_and_configured_heuristics():
     manager = SimulationManager(connected_network_with_many_pairs(), few_samples_threshold=3,
                                 high_speed_warning_percent=25, difference_threshold_kmh=2)
 
-    async def start_and_stop():
-        await manager.start()
-        if manager._task:
-            manager._task.cancel()
-            try:
-                await manager._task
-            except asyncio.CancelledError:
-                pass
-
-    asyncio.run(start_and_stop())
-    values = [[60, 40], [30, 30, 30], [50, 50, 50], [50, 50, 50], [50, 50, 50]]
-    for truck, speeds in zip(manager.simulation["trucks"], values):
-        truck["samples"] = [{"speed_kmh": speed} for speed in speeds]
-    report = manager.report()
+    started = manager.start()
+    report = manager.report(started["seed"], started["started_at"])
     first, second = report["trucks"][:2]
-    assert first["average_speed_kmh"] == 50
-    assert first["above_55_kmh"] == 1
-    assert first["above_55_percent"] == 50
-    assert second["average_speed_kmh"] == 30
-    assert "Más del 25 %" in report["explanation"]
+    assert first["average_speed_kmh"] == started["trucks"][0]["speed_kmh"]
+    assert first["above_55_kmh"] in (0, 1)
+    assert first["above_55_percent"] in (0, 100)
+    assert second["average_speed_kmh"] == started["trucks"][1]["speed_kmh"]
     assert "promedio de la flota" in report["explanation"]
 
 

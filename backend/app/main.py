@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import math
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +47,8 @@ def load_services() -> tuple[RoadNetwork, SimulationManager]:
 
 
 app = FastAPI(title="IDS26-C8Q1 Road Fleet", version="1.0.0",
-              description="API para red vial, simulación reproducible de cinco camiones e indicadores de velocidad.")
+              description="API para red vial, simulación reproducible de cinco camiones e indicadores de velocidad.",
+              docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json")
 network: RoadNetwork | None = None
 simulations: SimulationManager | None = None
 startup_error: str | None = None
@@ -103,27 +105,36 @@ def get_locations() -> dict[str, list[dict[str, Any]]]:
 
 
 @app.post("/api/simulations", status_code=201, tags=["Simulación"])
-async def start_simulation(body: StartRequest | None = None) -> dict[str, Any]:
+def start_simulation(body: StartRequest | None = None) -> dict[str, Any]:
     _, manager = require_services()
     try:
-        return await manager.start(body.seed if body else None)
+        return manager.start(body.seed if body else None)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"error": "unreachable_network", "message": str(exc)}) from exc
 
 
 @app.get("/api/simulations/current", tags=["Simulación"])
-def current_simulation() -> dict[str, Any]:
+def current_simulation(seed: int | None = None, started_at: datetime | None = None) -> dict[str, Any]:
     _, manager = require_services()
-    return manager.current(include_routes=False)
+    try:
+        return manager.current(seed, started_at, include_routes=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"error": "invalid_simulation_reference", "message": str(exc)}) from exc
 
 
 @app.get("/api/simulations/report", tags=["Reporte"])
-def simulation_report() -> dict[str, Any]:
+def simulation_report(seed: int | None = None, started_at: datetime | None = None) -> dict[str, Any]:
     _, manager = require_services()
-    return manager.report()
+    try:
+        return manager.report(seed, started_at)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"error": "invalid_simulation_reference", "message": str(exc)}) from exc
 
 
-@app.get("/api/openapi.json", include_in_schema=False)
-def openapi_json() -> dict[str, Any]:
-    return app.openapi()
-
+@app.get("/api/simulations/snapshot", tags=["Simulación", "Reporte"])
+def simulation_snapshot(seed: int | None = None, started_at: datetime | None = None) -> dict[str, Any]:
+    _, manager = require_services()
+    try:
+        return manager.snapshot(seed, started_at)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"error": "invalid_simulation_reference", "message": str(exc)}) from exc

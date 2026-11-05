@@ -3,7 +3,21 @@ import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip, useMap } from
 import { Activity, AlertTriangle, ArrowDownToLine, ArrowUpFromLine, Clock3, Gauge, Map as MapIcon, Play, RotateCcw, Truck } from 'lucide-react'
 
 const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+const RUN_STORAGE_KEY = 'ids26-c8q1-run'
 const fmt = (value, digits = 1) => value == null ? '—' : Number(value).toFixed(digits)
+
+function readSavedRun() {
+  try {
+    const run = JSON.parse(window.localStorage.getItem(RUN_STORAGE_KEY) || 'null')
+    return Number.isInteger(run?.seed) && typeof run?.started_at === 'string' ? run : null
+  } catch { return null }
+}
+
+function runQuery(run) {
+  if (!run) return ''
+  const params = new URLSearchParams({ seed: String(run.seed), started_at: run.started_at })
+  return `?${params.toString()}`
+}
 
 function FitNetwork({ routes }) {
   const map = useMap()
@@ -33,6 +47,7 @@ function MapView({ network, simulation }) {
 function App() {
   const [network, setNetwork] = useState(null)
   const [simulation, setSimulation] = useState(null)
+  const [runRef, setRunRef] = useState(readSavedRun)
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
@@ -49,23 +64,24 @@ function App() {
     return response.json()
   }, [])
 
-  const refresh = useCallback(async (includeNetwork = false) => {
+  const refresh = useCallback(async (includeNetwork = false, activeRun = runRef) => {
     const shouldLoadNetwork = includeNetwork || !networkLoaded.current
     try {
-      const [simData, reportData] = await Promise.all([get('/api/simulations/current'), get('/api/simulations/report')])
+      const query = runQuery(activeRun)
+      const snapshot = await get(`/api/simulations/snapshot${query}`)
       if (shouldLoadNetwork) {
         setNetwork(await get('/api/network'))
         networkLoaded.current = true
       }
-      setSimulation(simData.status === 'sin_iniciar' ? null : simData)
-      setReport(reportData)
+      setSimulation(snapshot.simulation.status === 'sin_iniciar' ? null : snapshot.simulation)
+      setReport(snapshot.report)
       setUpdated(new Date())
       setError('')
     } catch (e) { setError(`No se pudo consultar la API: ${e.message}`) }
     finally { if (shouldLoadNetwork) setLoading(false) }
-  }, [get])
+  }, [get, runRef])
 
-  useEffect(() => { refresh(true) }, [refresh])
+  useEffect(() => { refresh(!networkLoaded.current) }, [refresh])
   useEffect(() => {
     const id = window.setInterval(() => refresh(), 2000)
     return () => window.clearInterval(id)
@@ -77,7 +93,10 @@ function App() {
       const response = await fetch(`${API}/api/simulations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       const body = await response.json()
       if (!response.ok) throw new Error(body.detail?.message || `Error HTTP ${response.status}`)
-      setSimulation(body); setError(''); await refresh()
+      const nextRun = { seed: body.seed, started_at: body.started_at }
+      try { window.localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(nextRun)) } catch { /* State remains usable for this tab. */ }
+      setRunRef(nextRun)
+      setSimulation(body); setReport(null); setError('')
     } catch (e) { setError(`No se pudo iniciar la simulación: ${e.message}`) }
     finally { setStarting(false) }
   }
