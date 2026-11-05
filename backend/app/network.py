@@ -4,6 +4,7 @@ import heapq
 import json
 import math
 import os
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,8 @@ class RoadNetwork:
     def _valid_point(point: Any) -> bool:
         if not isinstance(point, (list, tuple)) or len(point) != 2:
             return False
+        if any(isinstance(value, bool) for value in point):
+            return False
         try:
             lat, lon = float(point[0]), float(point[1])
             return math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180
@@ -84,7 +87,7 @@ class RoadNetwork:
                 self.validation["invalid_routes"] += 1
                 continue
             route_id, points = raw.get("id_trm_cs"), raw.get("points")
-            if not isinstance(route_id, int) or route_id in seen_route_ids:
+            if not isinstance(route_id, int) or isinstance(route_id, bool) or route_id in seen_route_ids:
                 self._warn(f"Routes[{index}] tiene un identificador inválido o repetido y se omitió.")
                 self.validation["invalid_routes"] += 1
                 continue
@@ -93,8 +96,12 @@ class RoadNetwork:
                 self.validation["invalid_routes"] += 1
                 continue
             seen_route_ids.add(route_id)
+            color = raw.get("color")
+            if not isinstance(color, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
+                self._warn(f"El tramo {route_id} no tiene un color hexadecimal válido; se representa en gris.")
+                color = "#64748b"
             route = {"id_trm_cs": route_id, "nombre_tramo": str(raw.get("nombre_tramo") or f"Tramo {route_id}"),
-                     "color": raw.get("color") if isinstance(raw.get("color"), str) and raw["color"].startswith("#") else "#64748b",
+                     "color": color,
                      "points": [[float(p[0]), float(p[1])] for p in points]}
             self.routes.append(route)
             for a, b in zip(route["points"], route["points"][1:]):
@@ -112,14 +119,18 @@ class RoadNetwork:
             target = self.loads if kind == "Load" else self.dumps
             seen_ids: set[int] = set()
             for index, raw in enumerate(data[kind]):
-                if (not isinstance(raw, dict) or not isinstance(raw.get("id"), int)
+                if (not isinstance(raw, dict) or not isinstance(raw.get("id"), int) or isinstance(raw.get("id"), bool)
                         or raw["id"] in seen_ids or not self._valid_point(raw.get("coor"))):
                     self._warn(f"{kind}[{index}] tiene datos incompletos o un identificador duplicado y se omitió.")
                     continue
                 seen_ids.add(raw["id"])
+                radio = raw.get("radio")
+                if radio is not None and (isinstance(radio, bool) or not isinstance(radio, (int, float)) or not math.isfinite(radio) or radio < 0):
+                    self._warn(f"La ubicación {raw['id']} tiene un radio inválido; se ignora ese límite.")
+                    radio = None
                 target.append({"id": raw["id"], "name": str(raw.get("name") or f"Ubicación {raw['id']}"),
                                "coor": [float(raw["coor"][0]), float(raw["coor"][1])],
-                               "radio": raw.get("radio") if isinstance(raw.get("radio"), (int, float)) else None})
+                               "radio": radio})
         if len(self.loads) < 1 or len(self.dumps) < 1:
             raise NetworkDataError("Se necesita al menos una ubicación de carga y otra de descarga válida.")
 

@@ -1,4 +1,6 @@
-from app.network import RoadNetwork
+import pytest
+
+from app.network import NetworkDataError, RoadNetwork
 
 
 def sample_network():
@@ -33,4 +35,23 @@ def test_malformed_route_is_skipped_with_warning():
     network = RoadNetwork(data)
     assert network.validation["invalid_routes"] == 1
     assert any("geometría incompleta" in warning for warning in network.validation["warnings"])
+
+
+def test_malformed_json_file_returns_a_clear_data_error(tmp_path):
+    path = tmp_path / "invalid.json"
+    path.write_text("{broken", encoding="utf-8")
+    with pytest.raises(NetworkDataError, match="No se pudo leer el JSON"):
+        RoadNetwork.from_file(path)
+
+
+def test_invalid_colors_and_radii_are_reported_without_mutating_input():
+    data = sample_network()
+    data["Routes"][0]["color"] = "blue"
+    data["Load"][0]["radio"] = -10
+    network = RoadNetwork(data)
+    assert network.routes[0]["color"] == "#64748b"
+    assert data["Routes"][0]["color"] == "blue"
+    assert data["Load"][0]["radio"] == -10
+    assert any("color hexadecimal" in message for message in network.validation["warnings"])
+    assert any("radio inválido" in message for message in network.validation["warnings"])
 

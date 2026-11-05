@@ -17,12 +17,17 @@ def utc_now() -> str:
 
 class SimulationManager:
     def __init__(self, network: RoadNetwork, *, seed: int = 3811, min_speed: float = 30,
-                 max_speed: float = 60, interval_seconds: float = 2):
+                 max_speed: float = 60, interval_seconds: float = 2,
+                 high_speed_warning_percent: float = 25, few_samples_threshold: int = 5,
+                 difference_threshold_kmh: float = 2):
         self.network = network
         self.seed = seed
         self.min_speed = min_speed
         self.max_speed = max_speed
         self.interval_seconds = interval_seconds
+        self.high_speed_warning_percent = high_speed_warning_percent
+        self.few_samples_threshold = few_samples_threshold
+        self.difference_threshold_kmh = difference_threshold_kmh
         self.simulation_id = 0
         self.simulation: dict[str, Any] | None = None
         self._rng = random.Random(seed)
@@ -36,6 +41,11 @@ class SimulationManager:
             pairs = self.network.reachable_pairs()
             if not pairs:
                 raise ValueError("No hay ningún par de carga y descarga conectado por la red.")
+            total_pairs = len(self.network.loads) * len(self.network.dumps)
+            route_selection = {"policy": "selección reproducible entre pares alcanzables",
+                               "reachable_pairs": len(pairs),
+                               "unreachable_pairs_skipped": total_pairs - len(pairs),
+                               "pairs_reused_to_fill_five": len(pairs) < 5}
             rng.shuffle(pairs)
             if len(pairs) < 5:
                 pairs = [pairs[i % len(pairs)] for i in range(5)]
@@ -71,7 +81,7 @@ class SimulationManager:
             self.simulation = {"id": self.simulation_id, "seed": chosen_seed, "status": "en_curso",
                                "started_at": utc_now(), "updated_at": utc_now(), "interval_seconds": self.interval_seconds,
                                "speed_limits_kmh": {"min": self.min_speed, "max": self.max_speed},
-                               "trucks": trucks, "_last_tick": now}
+                               "route_selection": route_selection, "trucks": trucks, "_last_tick": now}
             if self._task and not self._task.done():
                 self._task.cancel()
             self._task = asyncio.create_task(self._run_loop(self.simulation_id))
@@ -103,9 +113,12 @@ class SimulationManager:
                     # Speeds are sampled only while moving, so the stop does not distort the speed report.
                     if truck["status"] == "en_ruta":
                         truck["samples"].append(self._sample(truck))
-                if all(t["status"] == "finalizado" for t in self.simulation["trucks"]):
+                finished = all(t["status"] == "finalizado" for t in self.simulation["trucks"])
+                if finished:
                     self.simulation["status"] = "finalizada"
                 self.simulation["updated_at"] = utc_now()
+                if finished:
+                    return
 
     @staticmethod
     def _position_at(truck: dict[str, Any], distance: float) -> list[float]:
@@ -118,18 +131,24 @@ class SimulationManager:
         ratio = 0 if end == start else (distance - start) / (end - start)
         return [points[segment][i] + (points[segment + 1][i] - points[segment][i]) * ratio for i in (0, 1)]
 
-    def current(self) -> dict[str, Any]:
+    def current(self, *, include_routes: bool = True) -> dict[str, Any]:
         if self.simulation is None:
             return {"status": "sin_iniciar", "simulation": None}
         sim = self.simulation
+        trucks = []
+        for t in sim["trucks"]:
+            item = {"id": t["id"], "origin": t["origin"], "destination": t["destination"],
+                    "position": list(t["position"]), "speed_kmh": t["speed_kmh"],
+                    "status": t["status"], "updated_at": t["updated_at"],
+                    "distance_m": round(t["distance_m"], 2), "progress_m": round(t["progress_m"], 2),
+                    "route_ids": t["route_ids"]}
+            if include_routes:
+                item["route"] = t["route"]
+            trucks.append(item)
         return {"id": sim["id"], "seed": sim["seed"], "status": sim["status"],
                 "started_at": sim["started_at"], "updated_at": sim["updated_at"],
                 "interval_seconds": sim["interval_seconds"], "speed_limits_kmh": sim["speed_limits_kmh"],
-                "trucks": [{"id": t["id"], "origin": t["origin"], "destination": t["destination"],
-                            "position": list(t["position"]), "speed_kmh": t["speed_kmh"],
-                            "status": t["status"], "updated_at": t["updated_at"],
-                            "distance_m": round(t["distance_m"], 2), "progress_m": round(t["progress_m"], 2),
-                            "route_ids": t["route_ids"], "route": t["route"]} for t in sim["trucks"]]}
+                "route_selection": sim["route_selection"], "trucks": trucks}
 
     def report(self) -> dict[str, Any]:
         if self.simulation is None:
@@ -151,21 +170,30 @@ class SimulationManager:
         explanation = self._explain(rows, averages)
         return {"simulation_id": self.simulation["id"], "seed": self.simulation["seed"],
                 "sampling_interval_seconds": self.interval_seconds, "metric": "Media aritmética de muestras de velocidad en movimiento.",
+                "heuristic_thresholds": {"few_samples_below": self.few_samples_threshold,
+                                         "above_55_warning_percent": self.high_speed_warning_percent,
+                                         "fleet_difference_kmh": self.difference_threshold_kmh},
                 "trucks": rows, "explanation": explanation}
 
-    @staticmethod
-    def _explain(rows: list[dict[str, Any]], averages: list[tuple[str, float]]) -> str:
+    def _explain(self, rows: list[dict[str, Any]], averages: list[tuple[str, float]]) -> str:
         if not averages:
             return "Todavía no hay muestras de velocidad para comparar."
         fleet_avg = sum(x[1] for x in averages) / len(averages)
         fastest = max(averages, key=lambda x: (x[1], x[0]))
         slowest = min(averages, key=lambda x: (x[1], x[0]))
         sentences = [f"El promedio de la flota es {fleet_avg:.2f} km/h. {fastest[0]} registra el mayor promedio ({fastest[1]:.2f} km/h) y {slowest[0]} el menor ({slowest[1]:.2f} km/h)."]
-        few = [r["truck_id"] for r in rows if r["samples"] < 5]
+        few = [r["truck_id"] for r in rows if r["samples"] < self.few_samples_threshold]
         if few:
-            sentences.append(f"Hay pocas muestras (menos de 5) para: {', '.join(few)}.")
-        high = [r for r in rows if r["above_55_percent"] is not None and r["above_55_percent"] > 25]
+            sentences.append(f"Hay pocas muestras (menos de {self.few_samples_threshold}) para: {', '.join(few)}.")
+        high = [r for r in rows if r["above_55_percent"] is not None and r["above_55_percent"] > self.high_speed_warning_percent]
         if high:
-            sentences.append("Más del 25 % de las muestras supera 55 km/h en: " + ", ".join(f"{r['truck_id']} ({r['above_55_percent']:.1f} %)" for r in high) + ".")
+            sentences.append(f"Más del {self.high_speed_warning_percent:g} % de las muestras supera 55 km/h en: " + ", ".join(f"{r['truck_id']} ({r['above_55_percent']:.1f} %)" for r in high) + ".")
+        differences = [(truck_id, average - fleet_avg) for truck_id, average in averages
+                       if abs(average - fleet_avg) >= self.difference_threshold_kmh]
+        if differences:
+            comparisons = [f"{truck_id} está {abs(delta):.2f} km/h {'por encima' if delta > 0 else 'por debajo'}" for truck_id, delta in differences]
+            sentences.append(f"Respecto al promedio de la flota, {', '.join(comparisons)}.")
+        else:
+            sentences.append(f"Todos los promedios individuales están a menos de {self.difference_threshold_kmh:g} km/h del promedio de la flota.")
         return " ".join(sentences)
 

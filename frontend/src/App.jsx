@@ -48,16 +48,16 @@ function App() {
     return response.json()
   }, [])
 
-  const refresh = useCallback(async (initial = false) => {
+  const refresh = useCallback(async (includeNetwork = false) => {
     try {
-      const [networkData, simData, reportData] = await Promise.all([get('/api/network'), get('/api/simulations/current'), get('/api/simulations/report')])
-      setNetwork(networkData)
+      const [simData, reportData] = await Promise.all([get('/api/simulations/current'), get('/api/simulations/report')])
+      if (includeNetwork) setNetwork(await get('/api/network'))
       setSimulation(simData.status === 'sin_iniciar' ? null : simData)
       setReport(reportData)
       setUpdated(new Date())
       setError('')
     } catch (e) { setError(`No se pudo consultar la API: ${e.message}`) }
-    finally { if (initial) setLoading(false) }
+    finally { if (includeNetwork) setLoading(false) }
   }, [get])
 
   useEffect(() => { refresh(true) }, [refresh])
@@ -92,7 +92,7 @@ function App() {
         <button className="primary-button" onClick={start} disabled={loading || starting || !summary?.load_count}><span className="button-icon">{starting ? <Activity size={17} className="spin" /> : simulation ? <RotateCcw size={17} /> : <Play size={17} fill="currentColor" />}</span>{starting ? 'Iniciando…' : simulation ? 'Reiniciar simulación' : 'Iniciar simulación'}</button>
       </section>
 
-      {error && <div className="notice error-notice"><AlertTriangle size={18} /><span>{error}</span><button onClick={() => refresh()}>Reintentar</button></div>}
+      {error && <div className="notice error-notice"><AlertTriangle size={18} /><span>{error}</span><button onClick={() => refresh(!network)}>Reintentar</button></div>}
       {loading ? <div className="loading-panel"><span className="loader" /><p>Cargando datos de la red…</p></div> : !network ? <div className="empty-panel"><AlertTriangle /><h2>Los datos no están disponibles</h2><p>Revisa que el backend esté activo y que el JSON sea válido.</p></div> : <>
         <section className="metric-row">
           <Metric icon={<MapIcon />} label="Tramos viales" value={summary?.route_count ?? 0} note={`${summary?.component_count ?? 0} sectores conectados`} />
@@ -108,6 +108,7 @@ function App() {
           </article>
           <article className="panel fleet-panel"><div className="panel-heading"><div><div className="section-kicker">SEGUIMIENTO</div><h2>Flota activa</h2></div><span className={`count-pill ${running ? 'count-live' : ''}`}>{trucks.length} unidades</span></div>
             {trucks.length ? <div className="truck-list">{trucks.map((truck, index) => <TruckRow key={truck.id} truck={truck} index={index} />)}</div> : <div className="panel-empty"><div className="empty-icon"><Truck size={20} /></div><h3>Sin camiones en ruta</h3><p>Inicia la simulación para asignar cinco unidades a recorridos conectados.</p></div>}
+            {simulation?.route_selection?.unreachable_pairs_skipped > 0 && <div className="route-note"><AlertTriangle size={13} /><span>Se omitieron {simulation.route_selection.unreachable_pairs_skipped} pares desconectados; se asignaron solo recorridos alcanzables.</span></div>}
             {simulation && <div className="seed-note"><span>SEMILLA DE EJECUCIÓN</span><b>{simulation.seed}</b><span className="seed-divider" /><span>RANGOS</span><b>{simulation.speed_limits_kmh?.min}–{simulation.speed_limits_kmh?.max} km/h</b></div>}
           </article>
         </section>
